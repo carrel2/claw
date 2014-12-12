@@ -1,54 +1,61 @@
 #!/usr/local/bin/python2
 
 import sys
+import os
 import paramiko
 import git
+import logging
 import smtplib
 from email.mime.text import MIMEText
 
 passwordFlag = False
 
-def suppressPasswords( configFile ):
+def suppressPasswords( configInfo ):
         #Called when script is run with -p flag.
         #Needs to look through the config file generated and remove
         #passwords and other sensitive information. Should be
         #independent of the machine.
 
-        pass
+        return configInfo
 
 def checkFormat( output=False ):
-        file = open( 'claw.conf', 'r' )
+        try:
+                file = open( 'claw.conf', 'r' )
 
-        contents = file.read()
+                contents = file.read()
 
-        leftBracketList = findAll( contents, '{' )
-        rightBracketList = findAll( contents, '}' )
+                leftBracketList = findAll( contents, '{' )
+                rightBracketList = findAll( contents, '}' )
 
-        if len( leftBracketList ) != len( rightBracketList ):
+                if len( leftBracketList ) != len( rightBracketList ):
+                        if output:
+                                print "Missing a bracket"
+
+                        return False
+
+                for index in range( len( leftBracketList ) - 1 ):
+                        if leftBracketList[index + 1] < rightBracketList[index]:
+                                if output:
+                                        print "Misplaced left bracket '{'"
+
+                                return False
+
+                        if rightBracketList[index + 1] < leftBracketList[index]:
+                                if output:
+                                        print "Misplaced right bracket '}'"
+
+                                return False
+
+                file.close()
+
                 if output:
-                        print "Missing a bracket"
+                        print "All good"
 
+                return True
+
+        except IOError:
+                print "Couldn't find claw.conf!"
                 return False
-
-        for index in range( len( leftBracketList ) - 1 ):
-                if leftBracketList[index + 1] < rightBracketList[index]:
-                        if output:
-                                print "Misplaced left bracket '{'"
-
-                        return False
-
-                if rightBracketList[index + 1] < leftBracketList[index]:
-                        if output:
-                                print "Misplaced right bracket '}'"
-
-                        return False
-
-        file.close()
-
-        if output:
-                print "All good"
-
-        return True
 
 def findAll( string, substring ):
         i = 0
@@ -63,8 +70,13 @@ def findAll( string, substring ):
 
         return indexlist
 
-def clawMachines():
-        repo = git.Repo( "/home/carrel2" )
+def clawMachines( debug=False ):
+        try:
+                repo = git.Repo( os.getcwd() )
+        except git.exc.InvalidGitRepositoryError:
+                repo = git.Repo.init( os.getcwd() )
+
+        rows, columns = os.popen( 'stty size', 'r' ).read().split()
         index = repo.index
         file = open( 'claw.conf', 'r' )
 
@@ -72,63 +84,109 @@ def clawMachines():
         toAddress = file.readline()[:-1]
         subject = file.readline()[:-1]
 
+        blockNumber = 0
+        logMessage = ''
+
         while file.readline():
                 hosts = file.readline()[:-1].split( ',' )
                 username = file.readline()[:-1]
                 password = file.readline()[:-1]
+                command = file.readline()[:-1]
                 commands = []
 
-                while file.readline()[:-1] != '}':
-                        commands.append( file.readline()[:-1] )
+                blockNumber += 1
+
+                while command != '}':
+                        if command != '' and command != '{':
+                                commands.append( command.strip() )
+
+                        command = file.readline()[:-1]
 
                 for host in hosts:
-
                         client = paramiko.SSHClient()
 
                         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        client.connect( host, username=username, password=password )
 
-                        for command in commands:
-                                configFileName = host + "-" + command.replace( " ", "-" )
-                                configFile = open( configFileName, 'w' )
+                        try:
+                                client.connect( host, username=username, password=password )
 
-                                stdin, stdout, stderr = client.exec_command( command )
+                                if debug:
+                                        print
+                                        print ''.center( int( columns ), '#' )
+                                        print host.center( int( columns ), ' ' )
+                                        print ''.center( int( columns ), '#' )
+                                        print
 
-                                configFile.write( stdout.read() )
+                                for command in commands:
+                                        stdin, stdout, stderr = client.exec_command( command )
 
-                                if passwordFlag:
-                                        suppressPasswords( configFile )
+                                        if debug:
+                                                print "Running:", command
+                                                print
+                                                print stdout.read()
+                                        else:
+                                                configFileName = host + "-" + command.replace( " ", "-" )
+                                                configFile = open( configFileName, 'w' )
 
-                                configFile.close()
+                                                if passwordFlag:
+                                                        configFile.write( suppressPasswords( stdout.read() ) )
+                                                else:
+                                                        configFile.write( stdout.read() )
 
-                                index.add( [configFileName] )
+                                                configFile.close()
 
-                        client.close()
+                                                index.add( [configFileName] )
+
+                                client.close()
+
+                        except Exception, e:
+                                if debug:
+                                        print
+                                        print "claw.conf block", blockNumber
+                                        print host
+                                        print e
+                                else:
+                                        logging.basicConfig( filename='claw.log', format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %H:%M' )
+
+                                        logging.warning( e )
+                                        logMessage += str( e )
 
         file.close()
 
-        diff = repo.git.diff( '--staged' )
+        if not debug:
 
-        if diff:
-                index.commit( configFileName )
-                message = MIMEText( diff )
-
-                message['From'] = fromAddress
-                message['To'] = toAddress
-                message['Subject'] = subject
+                diff = repo.git.diff( '--staged' )
 
                 s = smtplib.SMTP( 'localhost' )
-                s.sendmail( fromAddress, [toAddress], message.as_string() )
+
+                if diff:
+                        index.commit( configFileName )
+                        message = MIMEText( diff )
+
+                        message['From'] = fromAddress
+                        message['To'] = toAddress
+                        message['Subject'] = subject
+
+                        s.sendmail( fromAddress, [toAddress], message.as_string() )
+
+                if log != '':
+                        s.sendmail( fromAddress, [toAddress], logMessage )
+
                 s.quit()
+
+        else:
+                print
 
 ##                     ##
 # End of clawMachines() #
 ##                     ##
 
+if '-p' in sys.argv:
+        passwordFlag = True
+
 if '-c' in sys.argv:
         checkFormat( output=True )
-elif '-p' in sys.argv and checkFormat():
-        passwordFlag = True
-        clawMachines()
+elif '-d' in sys.argv and checkFormat():
+        clawMachines( debug=True )
 elif checkFormat():
         clawMachines()
