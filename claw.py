@@ -148,8 +148,8 @@ def clawMachines( debug=False ):
                                 else:
                                         logging.basicConfig( filename='claw.log', format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %H:%M' )
 
-                                        logging.warning( e )
-                                        logMessage += str( e )
+                                        logging.warning( 'In block %s: %s: %s', blockNumber, host, e )
+                                        logMessage += 'In block ' + str( blockNumber ) + '\n' + host + ': ' + str( e ) + '\n\n'
 
         file.close()
 
@@ -169,8 +169,14 @@ def clawMachines( debug=False ):
 
                         s.sendmail( fromAddress, [toAddress], message.as_string() )
 
-                if log != '':
-                        s.sendmail( fromAddress, [toAddress], logMessage )
+                if logMessage != '':
+                        message = MIMEText( logMessage )
+
+                        message['From'] = fromAddress
+                        message['To'] = toAddress
+                        message['Subject'] = 'CLAW errors'
+
+                        s.sendmail( fromAddress, [toAddress], message.as_string() )
 
                 s.quit()
 
